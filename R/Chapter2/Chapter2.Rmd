@@ -1,0 +1,735 @@
+---
+title: "Untitled"
+author: "Zhang Zhixian"
+date: "2023-07-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tensorflow)
+library(keras)
+library(tidyverse)
+```
+
+# 2.1 A first look at a neural network
+
+The MNIST dataset comes preloaded in Keras, in the form of a set of four R arrays, organized into two lists named *train* and *test*. *train_images* and *train_labels* form the training set, the data that the model will learn from, and they are one-to-one correspondence.
+
+```{r}
+mnist <- dataset_mnist()
+train_images <- mnist$train$x
+train_labels <- mnist$train$y
+test_images <- mnist$test$x
+test_labels <- mnist$test$y
+
+str(train_images)
+str(train_labels)
+str(test_images)
+str(test_labels)
+```
+
+The workflow is as follow: first, we will feed the neural network the training data, *train_images* and *train_labels*. Then the network will learn to associrte images and labels. Finally, we will ask the network to produce predictions for *test_images* and verify whether these predictions match the labels from *test_labels*.
+
+The next listing shows the network we build:
+
+```{r}
+model <- keras_model_sequential(list(
+  layer_dense(units = 512, activation = "relu"),
+  layer_dense(units = 10, activation = "softmax")
+))
+```
+
+The core building block of neural networks is the *layer*, which extracts meaningful representations out of the data fed into them. This is data distillation and the layers are like filters. The previous network consists of a sequence of two *Dense* layers, which are densely connected. The second layer is a 10-way *softmax classification* layer, which means it will return as array of 10 probability scores(summing to 1) and each score is the probability that the current digit image belongs to one of 10 digit classes. To make the model ready for training, we need to pick the following three things as part of the compilation step, shown in the following list: 
+
++ An optimizer -- The mechanism through which the model will improve itself based on training data. 
++ A loss function -- The criterion to measure the performance of the model. 
++ Metrics to monitor during training and testing -- The accuracy(the fraction of the images that were correctly classified).
+```{r}
+compile(model,
+        optimizer = 'rmsprop',
+        loss = 'sparse_categorical_crossentropy',
+        metrics = 'accuracy')
+```
+
+Before training, we reshape the data into the shape the model expected and scale it in [0,1] interval. Previously, the array of shape has the shape (60000,28,28) in [0,255] interval.
+```{r}
+train_images <- array_reshape(train_images,c(60000,28*28))
+train_images <- train_images/255
+test_images <- array_reshape(test_images,c(10000,28*28))
+test_images <- test_images/255
+
+# here we use the array_shape() function instead of dim()
+```
+
+Now we are ready to train the model by _fit()_ method:
+```{r}
+fit(model,train_images,train_labels,epochs=5,batch_size=128)
+```
+Now we have a trained model and we can use it to predict class probabilities for test set:
+```{r}
+test_digits <- test_images[1:10,]
+predictions <- predict(model,test_digits)
+str(predictions)
+predictions[1,]
+```
+Here each number of index i in _predictions[1,]_ means the probability that digit image _test_digits[1,]_ belongs to class i. 
+```{r}
+which.max(predictions[1,])
+predictions[1,8]
+test_labels[1]
+```
+According to the result we can know that index 8 has the highest probability score, so for this model it must be 7.
+
+On average, how good is our model at classifying such never-before-seen digits? Now we measure the accuracy.
+```{r}
+metrics <- evaluate(model,test_images,test_labels)
+metrics
+metrics['accuracy']
+```
+The accuracy of the test set can be much lower than the training set, which means the model is **overfitting**.
+
+# 2.2 Data representations for neural networks
+
+2.2.1 Scalars(rank 0 tensors)
+Notice that R does not have scalar data type, but vector of length 1 is similar to a scalar.
+
+2.2.2 Vectors(rank 1 tensors)
+An array of numbers is called a *vector*, or rank 1 tensor, or 1D tensor, which has one axis.
+```{r}
+x <- as.array(c(12,3,6,14,7))
+str(x) # str() check classification of viriables
+length(dim(x))
+```
+**Notice:** this vector has five entries, so is called a *five-dimensional vector*, but 5D vector is totally different from the 5D tensor. 5D vector only has one axis but five dimensions along its axis, whereas a 5D tensor has five axes.
+
+2.2.3 Matrices(rank 2 tensors)
+Since a matrix has two axes(*rows* and *columns*), a matrix is a rank 2 tensor.
+```{r}
+x <- array(seq(3*5),dim = c(3,5))
+x
+dim(x)
+```
+
+2.2.4 Rank 3 and higher-rank tensors
+Rank 3 tensor is visually a cube of numbers or a stack of rank 2 tensors:
+```{r}
+x <- array(seq(2*3*4),dim = c(2,3,4))
+str(x)
+length(dim(x))
+```
+Higher-rank tensors are the same.
+
+2.2.5 Key attributes
+A tensor is defined by three key attributes:
+  + *Number of axes(rank)* -- This is available from *length(din(x))*.
+  + *Shape* -- This is an integer vector that describes how many dimensions the tensor has along each axis.
+  + *Data type* -- This describes the type of the data contained in the tensor.
+  
+```{r}
+mnist <- dataset_mnist()
+train_images <- mnist$train$x
+train_labels <- mnist$train$y
+test_images <- mnist$test$x
+test_labels <- mnist$test$y
+```
+
+```{r}
+length(dim(train_images))  # number of axes of the tensor train_images
+dim(train_images)  # shape
+typeof(train_images) # data type
+```
+As for the fifth digit in this rank 3 tensor:
+```{r}
+digit <- train_images[5, , ]
+plot(as.raster(abs(255-digit),max = 255))  # what is this ??
+```
+
+```{r}
+train_labels[5]
+```
+
+2.2.6 Manipulating tensors in R
+We can select a specific digit alongside the first axis:
+```{r}
+slice1 <- train_images[10:99, , ]
+dim(slice1)
+```
+Also, we can select slices between any two indices along each tensor aixs:
+```{r}
+slice2 <- train_images[, 15:28, 15:28]
+dim(slice2)
+```
+
+2.2.7 The notion of data batches
+Generally we will break the data into small batches to make it more convenient to process:
+```{r}
+n <- 3
+batch <- train_images[seq(to=128*n,length=128), , ]
+```
+
+2.2.8 Real-world examples of data tensors
+Most of the data falls into following categories:
+  + *Vector data* -- rank 2 tensors of shape _(samples,features)_, where each sample is a vector of numerical attributes "features".
+  + *Times-series data or sequence data* -- rank 3 tensors of shape _(samples, timesteps, features)_, where each sample is a sequence of length _timesteps_ of feature vectors.
+  + *Images* -- rank 4 tensors of shape _(samples, height, width, channels)_, where each sample is a 2D grid of pixels, and each pixel is represented by a vector of value "channels".
+  + *Video* -- rank 5 tensors of shape _(samples, frames, height, width, channels)_, where each samples is a sequence of length _frame_ of images.
+
+1. Vector data
+In this case each single data point can be encoded as a vector and thus a batch of data can be encoded as a rank 2 tensor, that is, a matrix. The first axis is the _sample axis_ and the second axis is the _features axis_.
+Example:
+  + An actuarial data of people includes age, gender and income. Since each single data is a vector of 3 values, the entire dataset of 100,000 people can be stored in a rank 2 tensor of shape _(100000,3)_.
+  
+2. Time-series data or sequence data
+When time matters in the data, it makes sense to store it in a rank 3 tensor with a time axis.
+```{r}
+knitr::include_graphics('rank3-tensor-time.png')
+```
+Example:
+  + A dataset of stock prices should be stored into a 3D tensor, including current price in every minute, the highest price in the past minute and the lowest price in the past minute. Thus an entire day of trading is encoded as a matrix of shape _(390,3)_, and for 250 days, we store them into a rank 3 tensor of shape _(250,390,3)_.
+
+3. Image data
+A batch of 128 grayscale images of size 256*256 can be stored in a 4D tensor of shape _(128,256,256,1)_, and a batch of 128 color images could be stored in a tensor of shape _(128,256,256,3)_.
+```{r}
+knitr::include_graphics('rank4-tensor-image.png')
+```
+
+4. Video data
+For instance, a 60-second, 144*256 video clip sampled at 4 frames per second would have 240 frames, so the batch of four such video clips would be stored in a tensor of the shape _(4,240,144,256,3)_.
+Notice that here the data is R integers, stored in 32 bits and represents 405 MB, which is so heavy! However, in the real life they are not stored as R integers but in the MPEG format.
+
+
+# 2,3 The gears of neural networks: Tensor operations
+All transformations learned by deep neural networks can be reduced to a handful of *tensor operations or tensor functions* applied to tensors of numeric data.
+In our initial example, we built a model by stacking _Dense_ layers on top of each other, and Keras layer instance looks like:
+```{r}
+layer_dense(units = 512,activation = 'relu')
+```
+This layer can be interpreted as a function, which takes as input a matrix and returns another matrix -- a new representation for the input tensor. Specifically, the function is as follows(where W is a matrix and b is a vector, both properties of the layer):
+```{r}
+output <- relu(dot(W,input) + b)
+```
+There are three tensor operations:
+  + A dot product _dot_ between the input tensor and a tensor named W
+  + An addition _+_ between the resulting matrix and a vector b
+  + A _relu_ operation: _relu(x)_ is an element-wise _max(x,0)_; *relu* stands for rectified linear unit
+  
+2.3.1 Element-wise operations
+The _relu_ operations are highly amenable to massively parallel implementations. For the naive R implementation of an element-wise operation, we use _for_ loop as following:
+```{r}
+naive_relu <- function(x){
+  stopifnot(length(dim(x)) == 2)  # check if it is true; if false then break
+  for (i in 1:nrow(x)) {
+    for (j in 1:ncol(x)) {
+      x[i,j] <- max(x[i,j],0)
+    }
+  }
+  x
+}
+```
+We can do the same for addition operation:
+```{r}
+naive_add <- function(x,y){
+  stopifnot(length(dim(x)) == 2, dim(x) == dim(y))
+  for (i in 1:nrow(x)) {
+    for (j in 1:ncol(x)) {
+      x[i,j] <- x[i,j] + y[i,j]
+    }
+  }
+  x
+}
+```
+In practice, when dealing with R arrays, these operations are available as well-optimized built-in R functions which themselves delegate the heavy lifting to a Basic Linear Algebra Subprograms (BLAS) implementation.
+Now time the difference:
+```{r}
+random_array <- function(dim, min=0, max=1){
+  array(runif(prod(dim),min,max),dim) # prod() returns the product of all entries in the array
+}
+
+x <- random_array(c(20,100))
+y <- random_array(c(20,100))
+
+system.time({
+  for (i in seq_len(1000)) {  #seq_len(x): generate a array from 1 to x
+    z <- x + y
+    z[z<0] <- 0
+  }
+})[['elapsed']]
+
+```
+```{r}
+system.time({
+  for (i in seq_len(1000)) {
+    z <- naive_add(x,y)
+    z <- naive_relu(z)
+  }
+})[['elapsed']]
+```
+
+2.3.2 Broadcasting
+Our _naive_add_ supports only the addition of rank 2 tensor, but in the _layer_dense()_, we added a rank 2 tensor with a vector.
+What we would like is for the smaller tensor to be _broadcast_ to match the shape of the larger tensor, which consists two steps:
+  + Axes are added to the smaller tensor to match the larger one.
+  + The smaller tensor is repeated alongside these new axes.
+
+As for a concrete example:
+```{r}
+X <- random_array(c(32,10)) # a matrix
+y <- random_array(c(10)) # a vector
+```
+First, we add a size 1 first axis to y:
+```{r}
+dim(y) <- c(1,10)
+str(y)
+```
+Then we repeat y 32 times alongside the new axis, so that we end up with a tensor Y with shape (32,10), where Y[i,]==y for i in seq(32):
+```{r}
+Y <- y[rep(1,32),]
+str(Y)
+```
+Thus the shapes of X and Y are the same.
+
+However, ideally we want no new rank 2 tensor to be created because it is inefficient. Most of the time the repeatition operation is entirely virtual: it happens at the algorithmic level instead of memory level.
+```{r}
+naive_add_matrix_and_vector <- function(x,y){
+  stopifnot(length(dim(x)) == 2, 
+            length(dim(y)) == 1,
+            ncol(x) == dim(y)
+            )
+  for (i in seq(dim(x)[1])) {
+    for (j in seq(dim(x)[2])) {
+      x[i,j] <- x[i,j]+y[j]
+    }
+  }
+  x
+}
+```
+
+2.3.3 Tensor product
+The element-wise product is done with the _*_ operator, whereas dot products use the _%*%_ operator:
+```{r}
+x <- random_array(c(32))
+y <- random_array(c(32))
+z <- x %*% y
+```
+For naive implementation:
+```{r}
+naive_vector_dot <- function(x,y){
+  stopifnot(length(dim(x)) == 1,
+            length(dim(y)) == 1,
+            dim(x) == dim(y)
+            )
+  z <- 0
+  for (i in seq_along(x)) {  #seq_along(X):generate a sequence of length x from 1
+    z <- z+x[i]*y[i]
+  }
+  z
+}
+```
+For the dot product between a matrix and a vector:
+```{r}
+naive_matrix_vector_dot1 <- function(x,y){
+  stopifnot(length(dim(x)) == 2,
+            length(dim(y)) == 1,
+            nrow(x) == dim(y)
+            )
+  z <- array(0,dim = dim(y)) #generate a vector of zeros with the same shape as y
+  for (i in 1:nrow(x)) {
+    for (j in 1:ncol(x)) {
+      z[i] <- z[i]+x[i,j]*y[j]
+    }
+  }
+  z
+}
+# reuse the previous function:
+naive_matrix_vector_dot <- function(x,y){
+  z <- array(0,dim = c(nrow(x)))
+  for (i in 1:nrow(x)) {
+    z[i] <- naive_vector_dot(x[i,],y)
+  }
+  z
+}
+```
+For the dot product of two matrices:
+```{r}
+naive_matrix_dot <- function(x,y){
+  stopifnot(length(dim(x)) == 2,
+            length(dim(y)) == 2,
+            ncol(x) == nrow(y)
+            )
+  z <- array(0,dim = c(nrow(x),ncol(y)))
+  for (i in 1:nrow(x)) {
+    for (j in 1:ncol(y)) {
+      row_x <- x[i,]
+      col_y <- y[,j]
+      z[i,j] <- naive_vector_dot(row_x,col_y)
+    }
+  }
+  z
+}
+```
+More generally, we can take the dot product between higher-dimensional tensors, following the same rules for shape compatibility for 2D case:
+$$(a,b,c,d) \cdot (d) \rightarrow (a,b,c) \\ (a,b,c,d) \cdot (d,e) \rightarrow (a,b,c,e)$$
+
+
+2.3.4 Tensor reshaping
+We always use it before feeding the data into our model.
+```{r}
+train_images <- array_reshape(train_images,c(60000,28*28))
+```
+Notice: we use _array_reshape()_ instead of _dim()_ function, since it is compatible with the way the numerical libraries called by Keras interpret array dimensions.
+Here gives an example:
+```{r}
+x <- array(1:6)
+x
+```
+
+```{r}
+array(x,dim = c(3,2))
+array_reshape(x,dim = c(3,2)) # notice the difference of order of entries between function 'array' and 'array_reshape'
+array_reshape(x,dim = c(2,3))
+```
+Also we can use _transposition_ to reshape the matrix:
+```{r}
+x <- array(1:6,dim = c(3,2))
+x
+t(x)
+```
+
+2.3.5 Geometric interpretation of tensor operations
+There are several kinds of geometric operations, and tjey can be expressed as tensor operations.
+  + Translation: adding a vector to a point will move the point by a fixed amount in a fixed direction.
+  + Rotation: A counterclockwise rotation of a 2D vector by an angle $\theta$. We achieve it via a dot prodcut with a $2 \times 2$ matrix _R = rbind(c(cos(theta), -sin(theta)), c(sin(theta), cos(theta))_.
+  + Scaling: A vertical and horizontal scaling of the image. It can be achieved via a dot product with a $2 \times 2$ matrix _S = rbind(c(horizontal_factor, 0), c(0, vertical_factor))_, that is, diagonal matrix. 
+  + Linear transform: A dot product with an arbitrary matrix implements a linear transform. Note that *scaling* and *rotation* are linear transformation.
+  + Affine transform: A combination of a linear transform and a translation with the form $y=W \cdot x+b$ implemented by _layer_dense()_.
+  + Dense layer with _relu_ activation: Repeating affine transforms ends up with an affine transform, like: _affine2(affine1(x))_ =$W2 \cdot (W1 \cdot x+b1)+b2=(W2 \cdot W1) \cdot x+(W2 \cdot b1+b2)$. Thus, a multilayer neural network made entirely of Dense layers without activations would be equivalent to a single Dense layer, and this is why we need activation functions like _relu_, which spare rich hypothesis spaces for deep neural networks.
+
+2.3.6 A geometric interpretation of deep learning
+In 3D, we put a red paper on top of a blue paper and crumple them together into a small ball, which will be the input data. A neural network is meant to figure out a transformation of the paper ball that would uncrumple it and make the two classes cleanly separable again, and with deep learning, this can be implemented as a series of simple transformation of the 3D space.
+
+
+
+# 2.4 The engine of neural networks: Gradient-based optimization
+As in the previous section, each neural layer from our first model example transforms its input data as follows:
+```{r}
+output <- relu(dot(input,W)+b)
+```
+
+Here, W and b are tensors which are attributes of the layer, called *weights* or *trainable parameters* of the layer, that is, the _kernel_ and _bias_. These can be learned by the model from training data.
+Initially, we use *random initialization* to fill matrices with small random values. The representations from _relu_ are meaningless, but they can be starting point to adjust the weights, which is called *training*.
+Repeat the following steps in a loop:
+1. Draw a batch of training samples, x, and corresponding targets, y_true.
+2. Run the model on x (called _forward pass_) to obtain predictions, _y_pred_.
+3. Compute the loss of the model on the batch, a measure of the mismatch between _y_pred_ and _y_true_
+4. Update all weights of the model that reduces the loss on this batch.
+Eventually this model will end up with a very low loss on its training data.
+
+The most difficult part is step 4. One intuitive solution is freezing all weights in the model except one coefficient being considered, and then update it by adding or abstracting to get the lowest loss. But this approach can be horribly inefficient since we need to compute two forward passes for each individual coefficient, and the *Gradient descent* is much better.
+
+Gradient descent is the optimization technique that powers modern neural networks. The gist of it is that: all of the function used in our models transform their input in a *smooth* and *continuous* way, which is mathematically equal to *differentiable*. Then we compute the gradient and move the coefficients to this direction to decrease the loss rapidly.
+
+2.4.2 Derivative of a tensor operation: The gradient
+The derivative of a tensor operation is called a *gradient*. It represents the *curvature* of the multidimensional surface described by the function and characterizes how the output of the function varies when the input parameters vary.
+Consider an example in machine learning, use matrix _W_ to compute a target candidate _y_pred_, and compute the loss between _y_pred_ and _y_true_:
+
+```
+y_pred <- dot(W,x)
+loss_value <- loss_fn(y_pred,y_true) 
+
+```
+Now we would like to use gradients to find the best direction to update W that makes _loss_value_ smallest.
+Notate the starting value of W as W0, then the derivative of f() at the point W0 is a tensor _grad(loss_value,W0)_, where each coefficient of it indicates the direction and magnitude of the change in _loss_value_, which also called " gradient of _loss_value_ with respect to W around W0". Actually, this tensor describes the *direction of steepest ascent* of loss_value=f(W) around W0, as well as the slope of this ascent.
+Thus, we just need to reduce the value of f(x) by moving x a little in the opposite direction, but note that the scaling factor step is needed because _grad(loss_value,W0)_ approximates the curvature only when close to W0.
+
+
+2.4.3 Stochastic gradient descent
+Given a differentiable function, it is theoretically possible to find its minimum by finding the point where its derivative is 0. As for a neural network, we need to find the combination of weight values that yields the smallest possible loss function, which can be done by the equation _grad(f(W),W)=0_. 
+Update the weights by following steps:
+
+1. Draw **a batch of training samples**, x, and corresponding targets, y_true.
+2. Run the model on x to obtain predictions, y_pred (called _forward pass_).
+3. Compute the loss of the model between y_pred and y_true.
+4. Compute the gradient of the loss with regard to the model's parameters (called _backward pass_).
+5. Move the parameters in the opposite direction from the gradient. The _learning rate_ would be a scalar factor eveluating the "speed" of the gradient descent process.
+
+This is called _mini-batch stochastic gradient descent_, and the following figure show the process in 1D space.
+```{r}
+knitr::include_graphics('learning-rate.png')
+```
+From the figure we can find that picking a reasonable value for the _learning_rate_ is important since if it is too small, there can be too many iterations, and if it is too large, the updates may end up taking to a different locations.
+Note that we can use _true SGD_ on every single sample to get a more accurate result, but it is far more expensive; or we can use _batch gradient descent_ on all data which is faster, but it is much more inaccurate. The mini-batch SGD ____(中和了两种误差) them.
+Use momentum as an analogy, we illustrate that updating the parameter w based not only on the current gradient value but also on the previous parameter update:
+```{r}
+past_velocity <- 0
+momentum <- 0.1
+repeat {
+  p <- get_current_parameters()  # what is this function ???????
+  
+  if (p$loss <= 0.01)
+    break
+  
+  velocity <- past_velocity*momentum+learning_rate*p$gradient
+  w <- p$w + momentum*velocity-learning_rate*p$gradient
+  
+  past_velocity <- velocity
+  update_parameter(w)
+}
+
+```
+
+2.4.4 Chaining derivatives: The backpropagation algorithm
+Is that true that differentiable function can be easily computed to get its gradient? How to compute the gradient of complex expressions? Now we give the _backpropagation algorithm_.
+
+1. The chain rule
+Backpropagation is a way to use the derivatives of simple operations to compute the gradient of arbitrary complex combinations of these atomic operations. 
+A neural network consists of many tensor operations chained together. For instance, the model expressed by W1, b1, W2 and b2 and the atomic operations _dot, relu, softmax, + and loss function_ are all differentiable:
+```{r}
+loss_value <- loss(y_true,
+                   softmax(dot(relu(dot(inputs,W1) + b1), W2) + b2))  # softmax is a activate function
+```
+Thus we can use the chain rule:
+```
+fg <- function(x){
+  x1 <- g(x)
+  y <- f(x1)
+  y
+}
+grad(y,x) == grad(y,x1)*grad(x1,x)
+```
+Applying the chain rule to the computation of the gradient values of a neural network gives rise to an algorithm called _backpropagation_.
+
+2. Automatic differentiation with computation graphs
+We use _computation graphs_ to think about backpropagation.
+Consider a example with two scalar variables w and b, a scalar input x, and some operations to get output y, so the loss_val=abs(y_true-y). Since we want to update w and b in a way that will minimize loss_val, we are interested in computing _grad(loss_val,b)_ and _grad(loss_val,w)_.
+If we propagate all these values from input to loss_val, we call that the _forward pass_. Now we reverse the graph, that is, create an opposite edge from bottom to top and ask how much does bottom vary as top varies, which is called _backward pass_.
+```{r}
+knitr::include_graphics('forward-pass.png')
+knitr::include_graphics('backward-pass.png')
+```
+We have:
+  + grad(loss_val,x2)=1, since loss_val=abs(4-x2);
+  + grad(x2,x1)=1, since x2=x1+b=x1+1;
+  + grad(x2,b)=1, since x2=x1+b=6_b;
+  + grad(x1,w)=2, since x1=x * w=2 * w
+Thus use the chain rule, we can get the target grad easily:
+  + grad(loss_val,w)=1 * 1 * 2=2;
+  + grad(loss_val,b)=1 * 1=1
+  
+That is the backpropagation: we 'back-propagate' the loss contributions of different nodes in a computation graph.
+
+3. The gradient tape in tensorflow
+The API through which we can leverage TensorFlow's automatic differentiation capabilities is the _GradientTape()_, which will record the tensor operations that run inside its scope in the form of a computation graph, and this graph can be used to retrieve the gradient of output.
+
+```{r}
+x <- tf$Variable(0)  # instantiate a scalar variable with an initial value of 0, since GradientTape by default only monitors variables created by tf.Variable() with the trace=True attribute
+with(tf$GradientTape() %as% tape,{ # open a GradientTape scope
+  y <- 2*x+3  # inside the scope, apply some tensor operations to our variables
+})
+grad_of_y_wrt_x <- tape$gradient(y,x) # use the tape to retrieve the gradient of the output y with respect to our variable x.
+```
+As for the tensor operations:
+```{r}
+x <- tf$Variable(array(0,dim = c(2,2))) # instantiate a variable with shape(2,2) with initial value of all zeros.
+with(tf$GradientTape() %as% tape,{
+  y <- 2*x+3
+})
+grad_of_y_wrt_x <- as.array(tape$gradient(y,x)) # a tensor of shape(2,2) describing the curvature of y=2*a+3 around x=array(0,dim = c(2,2)).
+```
+As for the lists of variables:
+```{r}
+W <- tf$Variable(random_array(c(2,2)))
+b <- tf$Variable(array(0,dim = c(2)))
+
+x <- random_array(c(2,2))
+with(tf$GradientTape() %as% tape,{
+  y <- tf$matmul(x,W)+b  # matmul is "dot product" in TensorFlow
+})
+grad_of_y_wrt_W_and_b <- tape$gradient(y,list(W,b))
+str(grad_of_y_wrt_W_and_b)  # a list of two tensors with the same shapes as W and b respectively.
+
+```
+
+# 2.5 Looking back at our first example
+
+```{r}
+knitr::include_graphics('relationship.png')
+```
+Now review each step by first example.
+
+The input data:
+```{r}
+mnist <- dataset_mnist()
+train_images <- mnist$train$x
+train_images <- array_reshape(train_images,c(60000,28*28))
+train_images <- train_images/255
+
+test_images <- mnist$test$x
+test_images <- array_reshape(test_images,c(10000,28*28))
+test_images <- test_images/255
+
+train_labels <- mnist$train$y
+test_labels <- mnist$test$y
+```
+
+The model is followed, which consists of a chain of two _Dense_ layers and each layer applies some tensor operations to the input data involving weight tensors,  which are attributes of the layers.
+```{r}
+model <- keras_model_sequential(list(
+  layer_dense(units = 512,activation = 'relu'),
+  layer_dense(units = 10,activation = 'softmax')
+))
+```
+
+The model-compilation step is followed. Here we know _sparse_categorical_crossentropy_ is the loss function used as a feedback signal for learning the weight tensors and which the training phase will attempt to minimize. Also, this happens via mini-batch stochastic gradient descent.
+```{r}
+compile(model,
+        optimizer = 'rmsprop',
+        loss = 'sparse_categorical_crossentropy',
+        metrics = c('accuracy'))
+```
+
+The training loop:
+```{r}
+fit(model,train_images,train_labels,epochs = 5,batch_size = 128)
+```
+As for the _fit()_ function, the model start to iterate on the training data in mini-batches of 128 samples, five times over(each iteration called *epoch*). For each batch, the model will calculate the gradient of the loss value with regard to the weights (by backpropagation algorithm) and move the weights in the opposite direction to the gradient. After five epochs, the model will have performed 2,345 gradient updates, and the loss can be small enough.
+
+
+2.5.1 Reimplementing our first example from scratch in TensorFlow
+
+
+1. A simple dense class
+_Dense_ layer implements the input transformation with model parameters W and b and element-wise function _activation()_.
+```{r}
+ouput <- activation(dot(W,input)+b)
+```
+Now implement a simple _Dense_ layer as a plain R environment and construct all the attributes above:
+```{r}
+layer_naive_dense <- funcrion(input_size,output_size,activation){
+  self <- new.env(parent = emptyenv())
+  attr(self,'class') <- 'NaiveDense'
+  
+  self$activation <- activation
+  
+  w_shape <- c(input_size,output_size)
+  w_initial_value <- random_array(w_shape,min=0,max=1e-1)
+  self$W <- tf$Variable(w_initial_value) # create a matrix W of shape(input_size,output_size), initialized with random values.
+  
+  b_shape <- c(output_size)
+  b_initial_vlue <- array(0,b_shape)
+  self$b <- tf$Variable(b_initial_value) # create a vector b of shape(output_size), initialized with zeros
+  
+  self$weights <- list(self$W,self$b) # convenience property for retrieving all the layer's weights
+  
+  self$call <- function(inputs){  # apply the forward pass in a function named call
+    self$activation(tf$matmul(inputs,self$W)+self$b) # we stick to TensorFlow operations in this function in this function, so that Gradient Tape can track them.
+  }
+  self
+}
+```
+
+2. A simple sequential class
+Now create a _naive_model_sequential()_ to chain these layers. The following code warps a list of layers and exposes a _call()_ method that simply calls the underlying layers on the inputs in order. Also _weights_ keep track of the parameters.
+
+```{r}
+naive_model_sequential <- function(layers){
+  self <- new.env(parent = emptyenv())
+  attr(self,'class') <- 'NaiveSequential'
+  
+  self$layers <- layers
+  
+  weights <- lapply(layers, function(layer){layer$weights})
+  self$weights <- do.call(c,weights) # flatten the nested list one level
+  
+  self$call <- function(inputs){
+    x <- inputs
+    for (layer in self$layers) {
+      x <- layer$call(x)
+    }
+    x
+  }
+  self
+}
+```
+Thus use the _NaiveDense_ class and _NaiveSequential_ class to create a mock Keras model:
+```{r}
+model <- naive_model_sequential(list(
+  layer_naive_dense(input_size=28*28,output_size=512,
+                    activation=tf$nn$relu),
+  layer_naive_dense(input_size=512,output_size=10,
+                    activation=tf$nn$softmax)
+))
+stopifnot(length(model$weights) == 4)
+```
+
+3. A batch generator
+Next iterate over the MNIST data in mini-batches:
+```{r}
+new_batch_generator <- function(images,labels,batch_size=128){
+  self <- new.env(parent = emptyenv())
+  attr(self,'class') <- 'BatchGenerator'
+  
+  stopifnot(nrow(images) == nrow(labels))
+  self$index <- 1
+  self$images <- images
+  self$labels <- labels
+  self$batch_size <- batch_size
+  self$num_batched <- ceiling(nrow(images)/batch_size)
+  
+  self$get_next_batch <- fucntion(){
+    start <- self$index
+    if (start > nrow(images)){
+      return(NULL)
+    } # Here generator is finished.
+    
+    end <- start + self$batch_size-1
+    if (end > nrow(images)){
+      end <- nrow(images)
+    } # last batch may be smaller
+    
+    self$index <- end+1
+    indices <- start:end
+    list(images = self$images[indices, ],
+         labels = self$labels[indices])
+  }
+  self
+}
+
+```
+
+
+2.5.2 Running one training step
+
+
+
+
+
+
+
+2.5.3 The full training loop
+
+
+
+
+
+
+
+
+
+2.5.4 Evaluating the model
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
